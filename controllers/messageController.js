@@ -17,21 +17,49 @@ export const getMessagesByProject = async (req, res) => {
 export const createMessage = async (req, res) => {
   try {
     const { project, content } = req.body;
-    if (!project || !content) return res.status(400).json({ error: "project and content required" });
-    const sender = req.user.id;
+    const sender = req.user?.id;
+
+    // ✅ Validate inputs
+    if (!project || !content) {
+      return res
+        .status(400)
+        .json({ error: "Project and content are required." });
+    }
+
+    if (!sender) {
+      return res
+        .status(401)
+        .json({ error: "Unauthorized. User not found in request." });
+    }
+
+    // ✅ Save message to DB
     let message = new Message({ project, content, sender });
     await message.save();
-    message = await Message.findById(message._id).populate("sender", "name _id");
+
+    // ✅ Populate sender info
+    message = await Message.findById(message._id).populate(
+      "sender",
+      "name _id"
+    );
+
+    // ✅ Emit message to project room via Socket.IO
     try {
       const io = getSocketIO();
-      io.to(`project_${project}`).emit("messageCreated", message);
+      if (io) {
+        io.to(`project_${project}`).emit("messageCreated", message);
+        console.log(`📨 Message emitted to project_${project}`);
+      } else {
+        console.warn("⚠️ Socket.IO not initialized yet.");
+      }
     } catch (e) {
-      console.warn("Socket emit skipped (not initialized?)", e.message || e);
+      console.warn("⚠️ Socket emit skipped:", e.message || e);
     }
+
+    // ✅ Send back the created message
     res.status(201).json(message);
   } catch (err) {
-    console.error("Create message error:", err);
-    res.status(500).send("Server Error");
+    console.error("❌ Create message error:", err);
+    res.status(500).json({ error: "Server error. Please try again later." });
   }
 };
 
@@ -43,13 +71,13 @@ export const getDirectMessages = async (req, res) => {
     const messages = await Message.find({
       $or: [
         { sender: currentUser, receiver: otherUser },
-        { sender: otherUser, receiver: currentUser }
+        { sender: otherUser, receiver: currentUser },
       ],
-      project: null
+      project: null,
     })
-    .populate("sender", "name _id profilePicture")
-    .populate("receiver", "name _id profilePicture")
-    .sort({ createdAt: 1 });
+      .populate("sender", "name _id profilePicture")
+      .populate("receiver", "name _id profilePicture")
+      .sort({ createdAt: 1 });
 
     res.json(messages);
   } catch (err) {
@@ -62,7 +90,9 @@ export const createDirectMessage = async (req, res) => {
   try {
     const { receiver, content } = req.body;
     if (!receiver || !content) {
-      return res.status(400).json({ error: "Receiver and content are required" });
+      return res
+        .status(400)
+        .json({ error: "Receiver and content are required" });
     }
 
     const sender = req.user.id;
@@ -70,14 +100,14 @@ export const createDirectMessage = async (req, res) => {
       sender,
       receiver,
       content,
-      project: null
+      project: null,
     });
     await message.save();
 
     message = await Message.findById(message._id)
       .populate("sender", "name _id profilePicture")
       .populate("receiver", "name _id profilePicture");
-    
+
     const io = getSocketIO();
     io.to(`user_${receiver}`).emit("directMessageCreated", message);
     io.to(`user_${sender}`).emit("directMessageCreated", message);
@@ -93,52 +123,47 @@ export const createDirectMessage = async (req, res) => {
 export const getConversations = async (req, res) => {
   try {
     const currentUser = req.user.id;
-    
+
     // Find all unique users that the current user has messaged with
     const conversations = await Message.aggregate([
       {
         $match: {
-          $or: [
-            { sender: currentUser },
-            { receiver: currentUser }
-          ],
-          project: null
-        }
+          $or: [{ sender: currentUser }, { receiver: currentUser }],
+          project: null,
+        },
       },
       {
         $group: {
           _id: {
-            $cond: [
-              { $eq: ["$sender", currentUser] },
-              "$receiver",
-              "$sender"
-            ]
+            $cond: [{ $eq: ["$sender", currentUser] }, "$receiver", "$sender"],
           },
           lastMessage: { $last: "$$ROOT" },
           unreadCount: {
             $sum: {
               $cond: [
-                { $and: [
-                  { $eq: ["$receiver", currentUser] },
-                  { $eq: ["$read", false] }
-                ]},
+                {
+                  $and: [
+                    { $eq: ["$receiver", currentUser] },
+                    { $eq: ["$read", false] },
+                  ],
+                },
                 1,
-                0
-              ]
-            }
-          }
-        }
+                0,
+              ],
+            },
+          },
+        },
       },
       {
         $lookup: {
           from: "users",
           localField: "_id",
           foreignField: "_id",
-          as: "user"
-        }
+          as: "user",
+        },
       },
       {
-        $unwind: "$user"
+        $unwind: "$user",
       },
       {
         $project: {
@@ -147,15 +172,15 @@ export const getConversations = async (req, res) => {
             _id: "$user._id",
             name: "$user.name",
             profilePicture: "$user.profilePicture",
-            role: "$user.role"
+            role: "$user.role",
           },
           lastMessage: 1,
-          unreadCount: 1
-        }
+          unreadCount: 1,
+        },
       },
       {
-        $sort: { "lastMessage.createdAt": -1 }
-      }
+        $sort: { "lastMessage.createdAt": -1 },
+      },
     ]);
 
     res.json(conversations);
