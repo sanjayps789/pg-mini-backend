@@ -68,7 +68,7 @@ app.use("/api/feedback", feedbackRoutes);
 const server = http.createServer(app);
 
 // Pass the allowedOrigins to the socket initializer
-initSocket(server, allowedOrigins);
+initSocket(server, "http://localhost:5173");
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
